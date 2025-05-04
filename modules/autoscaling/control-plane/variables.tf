@@ -91,4 +91,16 @@ variable "etcd_backup_bucket" {
 variable "cluster_secret_id" {
   description = "ID of the Secrets Manager secret for cluster information"
   type        = string
+}
+
+variable "etcd_backup_schedule" {
+  description = "Schedule expression for automated etcd backups (e.g., 'cron(0 2 * * ? *)')"
+  type        = string
+  default     = "cron(0 2 * * ? *)"  # Default to 2 AM UTC daily
+}
+
+variable "backup_alarm_sns_topics" {
+  description = "List of SNS topic ARNs to notify when backup fails"
+  type        = list(string)
+  default     = []
 } 

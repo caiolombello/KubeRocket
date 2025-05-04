@@ -126,6 +126,49 @@ resource "helm_release" "bottlerocket_update_operator" {
   chart            = "bottlerocket-update-operator"
   namespace        = "bottlerocket-update-operator"
   create_namespace = true
+  version          = "1.2.1"  # Pin to specific version for stability
+
+  values = [
+    yamlencode({
+      updateStrategy: {
+        type: "RollingUpdate"
+        maxUnavailable: "25%"
+        maxParallel: 1
+      }
+      schedule: {
+        enabled: true
+        # Run updates at 2 AM UTC on Sundays
+        cronExpression: "0 2 * * 0"
+      }
+      monitoring: {
+        # Enable Prometheus metrics
+        metrics: {
+          enabled: true
+          serviceMonitor: {
+            enabled: var.enable_prometheus_monitoring
+          }
+        }
+      }
+      resources: {
+        requests: {
+          cpu: "100m"
+          memory: "128Mi"
+        }
+        limits: {
+          cpu: "200m"
+          memory: "256Mi"
+        }
+      }
+      nodeSelector: {
+        "kubernetes.io/os": "linux"
+      }
+      tolerations: [{
+        key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+      }]
+    })
+  ]
 
   depends_on = [module.workers]
 }

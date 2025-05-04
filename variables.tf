@@ -140,12 +140,47 @@ variable "node_groups" {
       value  = string
       effect = string
     }))
+    instance_types = list(string)
+    on_demand_base_capacity = number
+    on_demand_percentage = number
+    spot_allocation_strategy = string
+    scaling_config = object({
+      target_cpu_utilization    = number
+      target_memory_utilization = number
+      scale_in_cooldown        = number
+      scale_out_cooldown       = number
+    })
+    update_config = object({
+      max_unavailable_percentage = number
+      pause_time                = string
+    })
+    kubelet_args = map(string)
   }))
   default = {}
 
   validation {
     condition     = alltrue([for k, v in var.node_groups : v.min_size <= v.desired_size && v.desired_size <= v.max_size])
     error_message = "For each node group, min_size must be <= desired_size <= max_size."
+  }
+
+  validation {
+    condition     = alltrue([
+      for k, v in var.node_groups : (
+        v.on_demand_percentage == null || 
+        (v.on_demand_percentage >= 0 && v.on_demand_percentage <= 100)
+      )
+    ])
+    error_message = "on_demand_percentage must be between 0 and 100."
+  }
+
+  validation {
+    condition     = alltrue([
+      for k, v in var.node_groups : (
+        v.spot_allocation_strategy == null ||
+        contains(["lowest-price", "capacity-optimized", "price-capacity-optimized"], v.spot_allocation_strategy)
+      )
+    ])
+    error_message = "spot_allocation_strategy must be one of: lowest-price, capacity-optimized, price-capacity-optimized."
   }
 }
 
@@ -175,4 +210,10 @@ variable "instance_architecture" {
     condition     = contains(["arm64", "x86_64"], var.instance_architecture)
     error_message = "The instance_architecture must be either arm64 or x86_64."
   }
+}
+
+variable "enable_prometheus_monitoring" {
+  description = "Whether to enable Prometheus monitoring for the Bottlerocket Update Operator"
+  type        = bool
+  default     = false
 }
