@@ -13,9 +13,9 @@ provider "aws" {
 
 provider "helm" {
   kubernetes {
-    host                   = "https://${data.aws_lb.control_plane.dns_name}:6443"
-    cluster_ca_certificate = base64decode(local.cluster_info.cluster_ca_certificate)
-    token                  = local.cluster_info.token
+    host                   = module.control_plane.api_endpoint
+    cluster_ca_certificate = base64decode(module.control_plane.cluster_ca_certificate)
+    token                  = module.control_plane.bootstrap_token
   }
 }
 
@@ -102,73 +102,26 @@ module "workers" {
   source = "./modules/autoscaling/workers"
 
   cluster_name                 = var.cluster_name
-  node_groups                 = var.node_groups
+  node_groups                 = {
+    for name, group in var.node_groups : name => merge(group, {
+      subnet_ids = [
+        for cidr in group.subnet_ids : 
+        element(module.vpc.public_subnet_ids, index(var.public_subnets, cidr))
+      ]
+    })
+  }
   worker_security_group_id    = aws_security_group.worker.id
-  control_plane_endpoint      = "https://${data.aws_lb.control_plane.dns_name}:6443"
-  join_token                  = local.cluster_info.join_token
-  discovery_token_ca_cert_hash = local.cluster_info.discovery_token_ca_cert_hash
+  control_plane_endpoint      = module.control_plane.api_endpoint
+  join_token                  = module.control_plane.bootstrap_token
+  discovery_token_ca_cert_hash = module.control_plane.discovery_token_ca_cert_hash
+  cluster_ca_certificate      = module.control_plane.cluster_ca_certificate
   user_data_template          = "${path.module}/user-data/worker.tpl"
   kubernetes_version          = var.kubernetes_version
   labels                      = {}
   taints                      = []
   node_draining_enabled       = true
-  bottlerocket_ami_id         = local.ami_id
 
   tags = local.common_tags
 
   depends_on = [time_sleep.wait_for_control_plane]
-}
-
-# Bottlerocket Update Operator
-resource "helm_release" "bottlerocket_update_operator" {
-  name             = "bottlerocket-update-operator"
-  repository       = "https://bottlerocket-os.github.io/bottlerocket-update-operator"
-  chart            = "bottlerocket-update-operator"
-  namespace        = "bottlerocket-update-operator"
-  create_namespace = true
-  version          = "1.2.1"  # Pin to specific version for stability
-
-  values = [
-    yamlencode({
-      updateStrategy: {
-        type: "RollingUpdate"
-        maxUnavailable: "25%"
-        maxParallel: 1
-      }
-      schedule: {
-        enabled: true
-        # Run updates at 2 AM UTC on Sundays
-        cronExpression: "0 2 * * 0"
-      }
-      monitoring: {
-        # Enable Prometheus metrics
-        metrics: {
-          enabled: true
-          serviceMonitor: {
-            enabled: var.enable_prometheus_monitoring
-          }
-        }
-      }
-      resources: {
-        requests: {
-          cpu: "100m"
-          memory: "128Mi"
-        }
-        limits: {
-          cpu: "200m"
-          memory: "256Mi"
-        }
-      }
-      nodeSelector: {
-        "kubernetes.io/os": "linux"
-      }
-      tolerations: [{
-        key: "node-role.kubernetes.io/control-plane"
-        operator: "Exists"
-        effect: "NoSchedule"
-      }]
-    })
-  ]
-
-  depends_on = [module.workers]
 }

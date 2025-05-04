@@ -34,20 +34,37 @@ output "ssh_key_secret_arn" {
   value       = aws_secretsmanager_secret.ssh_key.arn
 }
 
-output "kubeconfig" {
-  description = "Kubeconfig for the cluster"
-  value       = local.cluster_info.kubeconfig
+output "api_endpoint" {
+  description = "The endpoint for the Kubernetes API server"
+  value       = local.cluster_info.api_endpoint
+}
+
+output "cluster_ca_certificate" {
+  description = "The cluster CA certificate in base64 format"
+  value       = local.cluster_info.cluster_ca_certificate
   sensitive   = true
 }
 
 output "join_token" {
   description = "Token for joining worker nodes"
-  value       = local.cluster_info.join_token
+  value       = local.cluster_info.bootstrap_token
   sensitive   = true
 }
 
-output "join_hash" {
-  description = "Discovery token CA cert hash for joining worker nodes"
+output "discovery_token_ca_cert_hash" {
+  description = "Hash of the CA certificate for discovery"
   value       = local.cluster_info.discovery_token_ca_cert_hash
   sensitive   = true
+}
+
+# Generate kubeconfig for external access
+output "kubeconfig" {
+  description = "Kubeconfig for accessing the cluster"
+  sensitive   = true
+  value = templatefile("${path.module}/templates/kubeconfig.tpl", {
+    cluster_name     = var.cluster_name
+    api_endpoint     = local.cluster_info.api_endpoint
+    ca_certificate   = local.cluster_info.cluster_ca_certificate
+    token           = local.cluster_info.bootstrap_token
+  })
 } 

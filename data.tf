@@ -20,7 +20,12 @@ data "aws_secretsmanager_secret_version" "cluster_info" {
 }
 
 locals {
-  cluster_info = jsondecode(data.aws_secretsmanager_secret_version.cluster_info.secret_string)
+  cluster_info = {
+    api_endpoint               = module.control_plane.api_endpoint
+    cluster_ca_certificate     = module.control_plane.cluster_ca_certificate
+    bootstrap_token           = module.control_plane.bootstrap_token
+    discovery_token_ca_cert_hash = module.control_plane.discovery_token_ca_cert_hash
+  }
   
   # Common tags for all resources
   common_tags = {

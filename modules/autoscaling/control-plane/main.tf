@@ -347,6 +347,9 @@ resource "aws_launch_template" "control_plane" {
     aws_region     = data.aws_region.current.name
     setup_image    = var.setup_image
     setup_script   = local.setup_script
+    cluster_ca_cert = base64encode(tls_self_signed_cert.ca.cert_pem)
+    apiserver_cert  = base64encode(tls_locally_signed_cert.apiserver.cert_pem)
+    apiserver_key   = base64encode(tls_private_key.apiserver.private_key_pem)
   }))
 
   block_device_mappings {

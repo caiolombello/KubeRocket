@@ -27,11 +27,6 @@ variable "node_groups" {
   }))
 }
 
-variable "bottlerocket_ami_id" {
-  description = "ID of the Bottlerocket AMI to use"
-  type        = string
-}
-
 variable "worker_security_group_id" {
   description = "ID of the security group for worker nodes"
   type        = string
@@ -45,11 +40,19 @@ variable "control_plane_endpoint" {
 variable "join_token" {
   description = "Token for joining the Kubernetes cluster"
   type        = string
+  sensitive   = true
 }
 
 variable "discovery_token_ca_cert_hash" {
   description = "Hash of the Kubernetes CA certificate"
   type        = string
+  sensitive   = true
+}
+
+variable "cluster_ca_certificate" {
+  description = "The base64 encoded cluster CA certificate"
+  type        = string
+  sensitive   = true
 }
 
 variable "tags" {

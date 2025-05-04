@@ -9,8 +9,28 @@ terraform {
 
 data "aws_region" "current" {}
 
+# Bottlerocket AMIs from SSM Parameter Store
+data "aws_ssm_parameter" "bottlerocket_x86" {
+  name = "/aws/service/bottlerocket/aws-k8s-${local.bottlerocket_ssm_version}/x86_64/latest/image_id"
+}
+
+data "aws_ssm_parameter" "bottlerocket_arm64" {
+  name = "/aws/service/bottlerocket/aws-k8s-${local.bottlerocket_ssm_version}/arm64/latest/image_id"
+}
+
 locals {
   node_groups = var.node_groups
+  # Bottlerocket version configuration
+  bottlerocket_ssm_version = regex("^(\\d+\\.\\d+).*$", var.kubernetes_version)[0]
+  
+  # Instance architecture detection and AMI selection for each node group
+  node_group_architectures = {
+    for name, group in var.node_groups : name => {
+      is_arm_instance = can(regex("^(a1|t4g|c6g|c7g|m6g|m7g|r6g|r7g)", group.instance_type))
+      ami_id = can(regex("^(a1|t4g|c6g|c7g|m6g|m7g|r6g|r7g)", group.instance_type)) ? data.aws_ssm_parameter.bottlerocket_arm64.value : data.aws_ssm_parameter.bottlerocket_x86.value
+    }
+  }
+  
   # Processar labels e taints para user-data
   node_group_settings = {
     for name, group in var.node_groups : name => {
@@ -118,7 +138,7 @@ resource "aws_launch_template" "worker" {
   name_prefix = "${var.cluster_name}-${each.key}-"
   description = "Launch template for ${var.cluster_name} ${each.key} worker nodes"
 
-  image_id = var.bottlerocket_ami_id
+  image_id = local.node_group_architectures[each.key].ami_id
   instance_type = each.value.instance_type
 
   vpc_security_group_ids = [var.worker_security_group_id]
@@ -127,6 +147,7 @@ resource "aws_launch_template" "worker" {
     cluster_name     = var.cluster_name
     api_server_addr  = var.control_plane_endpoint
     join_token       = var.join_token
+    cluster_ca_certificate = var.cluster_ca_certificate
     discovery_token_ca_cert_hash = var.discovery_token_ca_cert_hash
     kubernetes_version = var.kubernetes_version
     aws_region      = data.aws_region.current.name
