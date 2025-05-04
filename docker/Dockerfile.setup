@@ -1,0 +1,49 @@
+ARG K8S_VERSION=1.32.4
+FROM public.ecr.aws/amazonlinux/amazonlinux:2 AS kubeadm
+ARG K8S_VERSION
+ARG TARGETARCH
+
+RUN yum install -y curl \
+ && curl -Lo /usr/bin/kubeadm \
+      https://dl.k8s.io/release/v${K8S_VERSION}/bin/linux/${TARGETARCH}/kubeadm \
+ && chmod +x /usr/bin/kubeadm
+
+FROM public.ecr.aws/amazonlinux/amazonlinux:2 AS builder
+ARG K8S_VERSION
+ARG TARGETARCH
+
+RUN yum update -y && yum install -y \
+    curl \
+    tar \
+    gzip \
+    openssl
+
+RUN curl -LO "https://dl.k8s.io/release/v${K8S_VERSION}/bin/linux/${TARGETARCH}/kubectl" && \
+    chmod +x kubectl && \
+    mv kubectl /usr/local/bin/
+
+RUN curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 && \
+    chmod +x get_helm.sh && \
+    VERIFY_CHECKSUM=true ./get_helm.sh
+
+FROM public.ecr.aws/amazonlinux/amazonlinux:2
+ARG TARGETARCH
+
+RUN yum update -y && \
+    yum install -y \
+    aws-cli \
+    bash \
+    etcd-client \
+    jq \
+    openssl \
+    && yum clean all
+
+COPY --from=kubeadm /usr/bin/kubeadm /usr/bin/kubeadm
+COPY --from=builder /usr/local/bin/kubectl /usr/local/bin/kubectl
+COPY --from=builder /usr/local/bin/helm /usr/local/bin/helm
+
+# Verificar se as ferramentas foram instaladas corretamente
+RUN kubeadm version && \
+    kubectl version --client && \
+    helm version && \
+    aws --version 

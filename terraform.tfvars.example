@@ -1,0 +1,66 @@
+# Exemplo 1: Single-node (Control plane com workloads)
+# ------------------------------------------------
+# cluster_name = "kuberocket-single"
+# aws_region   = "us-east-1"
+
+# Rede simplificada para single node
+# vpc_cidr        = "10.0.0.0/16"
+# public_subnets  = ["10.0.1.0/24"]  # Apenas uma subnet pública
+# private_subnets = []               # Não precisamos de subnets privadas
+# azs             = ["us-east-1a"]   # Apenas uma AZ
+
+# Desabilita NAT Gateway pois não temos subnets privadas
+# enable_nat_gateway = false
+# single_nat_gateway = false
+
+# Control plane que aceita workloads
+# instance_type                   = "t4g.small"
+# control_plane_count            = 1
+# control_plane_accepts_workloads = true  # Permite workloads no control plane
+
+# pod_network_cidr = "192.168.0.0/16"
+# ssh_allowed_cidr_blocks = ["0.0.0.0/0"]  # Ajuste para seu IP
+
+# Sem node groups pois usaremos o control plane para workloads
+# node_groups = {}
+
+
+# Exemplo 2: Cluster completo (Control plane + Workers)
+# ------------------------------------------------
+# cluster_name = "kuberocket-full"
+# aws_region   = "us-east-1"
+
+# # Rede completa com alta disponibilidade
+# vpc_cidr        = "10.0.0.0/16"
+# public_subnets  = ["10.0.1.0/24", "10.0.2.0/24"]
+# private_subnets = ["10.0.3.0/24", "10.0.4.0/24"]
+# azs             = ["us-east-1a", "us-east-1b"]
+
+# # NAT Gateway para subnets privadas
+# enable_nat_gateway = true
+# single_nat_gateway = true  # Usa apenas um NAT Gateway para economia
+
+# # Control plane dedicado sem workloads
+# instance_type                   = "t4g.small"
+# control_plane_count            = 1
+# control_plane_accepts_workloads = false  # Control plane dedicado
+
+# pod_network_cidr = "192.168.0.0/16"
+# ssh_allowed_cidr_blocks = ["0.0.0.0/0"]  # Ajuste para seu IP
+
+# # Node groups para workloads
+# node_groups = {
+#   "general" = {
+#     instance_type  = "t4g.small"
+#     min_size      = 1
+#     max_size      = 2
+#     desired_size  = 1
+#     disk_size     = 20
+#     subnet_ids    = ["10.0.3.0/24", "10.0.4.0/24"]  # Usa subnets privadas
+#     labels = {
+#       "node.kubernetes.io/role" = "worker"
+#       "environment"            = "test"
+#     }
+#     taints = []
+#   }
+# } 

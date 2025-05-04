@@ -1,0 +1,339 @@
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+data "aws_region" "current" {}
+
+# Bottlerocket AMIs from SSM Parameter Store
+data "aws_ssm_parameter" "bottlerocket_x86" {
+  name = "/aws/service/bottlerocket/aws-k8s-${local.bottlerocket_ssm_version}/x86_64/latest/image_id"
+}
+
+data "aws_ssm_parameter" "bottlerocket_arm64" {
+  name = "/aws/service/bottlerocket/aws-k8s-${local.bottlerocket_ssm_version}/arm64/latest/image_id"
+}
+
+locals {
+  setup_script = base64encode(templatefile("${var.scripts_path}/setup-k8s.sh", {
+    pod_network_cidr = var.pod_network_cidr
+    bootstrap_token = random_string.bootstrap_token.result
+    node_ip = "$${KUBELET_NODE_IP}"
+    hostname = "$${HOSTNAME}"
+    cluster_name = var.cluster_name
+    etcd_backup_bucket = aws_s3_bucket.etcd_backup.id
+    cluster_secret_id = var.cluster_secret_id
+    aws_region = data.aws_region.current.name
+    control_plane_accepts_workloads = var.control_plane_accepts_workloads
+  }))
+
+  # Bottlerocket version configuration
+  bottlerocket_ssm_version = regex("^(\\d+\\.\\d+).*$", var.kubernetes_version)[0]
+  
+  # Instance architecture detection and AMI selection
+  is_arm_instance = can(regex("^(a1|t4g|c6g|c7g|m6g|m7g|r6g|r7g)", var.instance_type))
+  ami_id = local.is_arm_instance ? data.aws_ssm_parameter.bottlerocket_arm64.value : data.aws_ssm_parameter.bottlerocket_x86.value
+}
+
+# S3 bucket for etcd backups
+resource "aws_s3_bucket" "etcd_backup" {
+  bucket_prefix = "${var.cluster_name}-etcd-backup-"
+  force_destroy = true
+
+  tags = merge(var.tags, {
+    Name = "${var.cluster_name}-etcd-backup"
+  })
+}
+
+resource "aws_s3_bucket_versioning" "etcd_backup" {
+  bucket = aws_s3_bucket.etcd_backup.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "etcd_backup" {
+  bucket = aws_s3_bucket.etcd_backup.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+# Launch template for control plane nodes
+resource "aws_launch_template" "control_plane" {
+  name_prefix = "${var.cluster_name}-control-plane-${substr(sha256(templatefile(var.user_data_template, {
+    cluster_name     = var.cluster_name
+    pod_network_cidr = var.pod_network_cidr
+    bootstrap_token  = random_string.bootstrap_token.result
+    etcd_backup_bucket = aws_s3_bucket.etcd_backup.id
+    kubernetes_version = var.kubernetes_version
+    control_plane_accepts_workloads = var.control_plane_accepts_workloads
+    etcd_endpoints = join(",", [for i in range(var.instance_count) : "https://etcd-${i}.${var.cluster_name}.internal:2379"])
+    initial_cluster = join(",", [for i in range(var.instance_count) : "etcd-${i}=https://etcd-${i}.${var.cluster_name}.internal:2380"])
+    aws_region     = data.aws_region.current.name
+    setup_image    = var.setup_image
+    setup_script   = local.setup_script
+  })), 0, 8)}-"
+  description = "Launch template for Kubernetes control plane nodes"
+
+  image_id      = local.ami_id
+  instance_type = var.instance_type
+
+  vpc_security_group_ids = var.security_group_ids
+
+  user_data = base64encode(templatefile(var.user_data_template, {
+    cluster_name     = var.cluster_name
+    pod_network_cidr = var.pod_network_cidr
+    bootstrap_token  = random_string.bootstrap_token.result
+    etcd_backup_bucket = aws_s3_bucket.etcd_backup.id
+    kubernetes_version = var.kubernetes_version
+    control_plane_accepts_workloads = var.control_plane_accepts_workloads
+    etcd_endpoints = join(",", [for i in range(var.instance_count) : "https://etcd-${i}.${var.cluster_name}.internal:2379"])
+    initial_cluster = join(",", [for i in range(var.instance_count) : "etcd-${i}=https://etcd-${i}.${var.cluster_name}.internal:2380"])
+    aws_region     = data.aws_region.current.name
+    setup_image    = var.setup_image
+    setup_script   = local.setup_script
+  }))
+
+  block_device_mappings {
+    device_name = "/dev/xvda"
+    ebs {
+      volume_size = 50
+      volume_type = "gp3"
+      encrypted   = true
+      iops        = 3000
+      throughput  = 125
+    }
+  }
+
+  iam_instance_profile {
+    name = aws_iam_instance_profile.control_plane.name
+  }
+
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 2
+  }
+
+  tags = merge(var.tags, {
+    Name = "${var.cluster_name}-control-plane"
+    "kubernetes.io/role/control-plane" = "1"
+  })
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# Additional IAM policies for etcd backup
+resource "aws_iam_role_policy" "etcd_backup" {
+  name_prefix = "etcd-backup-"
+  role        = aws_iam_role.control_plane.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:GetObject",
+          "s3:ListBucket",
+          "s3:DeleteObject"
+        ]
+        Resource = [
+          aws_s3_bucket.etcd_backup.arn,
+          "${aws_s3_bucket.etcd_backup.arn}/*"
+        ]
+      }
+    ]
+  })
+}
+
+# Auto Scaling Group for control plane with improved leader election
+resource "aws_autoscaling_group" "control_plane" {
+  name_prefix = "${var.cluster_name}-control-plane-"
+
+  desired_capacity = var.instance_count
+  max_size         = var.instance_count
+  min_size         = var.instance_count
+
+  vpc_zone_identifier = var.subnet_ids
+
+  launch_template {
+    id      = aws_launch_template.control_plane.id
+    version = "$Latest"
+  }
+
+  health_check_type         = "EC2"
+  health_check_grace_period = 300
+
+  # Improved rolling update strategy
+  max_instance_lifetime = 604800  # 7 days
+  
+  dynamic "tag" {
+    for_each = merge(
+      var.tags,
+      {
+        Name                                        = "${var.cluster_name}-control-plane"
+        "kubernetes.io/cluster/${var.cluster_name}" = "owned"
+        "kubernetes.io/role/control-plane"          = "1"
+      }
+    )
+    content {
+      key                 = tag.key
+      value               = tag.value
+      propagate_at_launch = true
+    }
+  }
+
+  lifecycle {
+    create_before_destroy = true
+    ignore_changes       = [desired_capacity]
+  }
+
+  instance_refresh {
+    strategy = "Rolling"
+    preferences {
+      min_healthy_percentage = 100
+      instance_warmup       = 300
+    }
+  }
+}
+
+# IAM role for control plane nodes
+resource "aws_iam_role" "control_plane" {
+  name_prefix = "${var.cluster_name}-control-plane-"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+# IAM role policies for control plane nodes
+resource "aws_iam_role_policy_attachment" "control_plane_AmazonEKSClusterPolicy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+  role       = aws_iam_role.control_plane.name
+}
+
+resource "aws_iam_role_policy_attachment" "control_plane_AmazonEKSServicePolicy" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSServicePolicy"
+  role       = aws_iam_role.control_plane.name
+}
+
+resource "aws_iam_role_policy_attachment" "control_plane_AmazonSSMManagedInstanceCore" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+  role       = aws_iam_role.control_plane.name
+}
+
+resource "aws_iam_role_policy_attachment" "control_plane_AmazonEC2RoleforSSM" {
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM"
+  role       = aws_iam_role.control_plane.name
+}
+
+resource "aws_iam_role_policy_attachment" "control_plane_EC2InstanceConnect" {
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM"
+  role       = aws_iam_role.control_plane.name
+}
+
+# Additional IAM policy for SSM Session Manager
+resource "aws_iam_role_policy" "control_plane_ssm_session" {
+  name_prefix = "ssm-session-"
+  role        = aws_iam_role.control_plane.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:UpdateInstanceInformation",
+          "ssmmessages:CreateControlChannel",
+          "ssmmessages:CreateDataChannel",
+          "ssmmessages:OpenControlChannel",
+          "ssmmessages:OpenDataChannel"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# IAM instance profile for control plane nodes
+resource "aws_iam_instance_profile" "control_plane" {
+  name_prefix = "${var.cluster_name}-control-plane-"
+  role        = aws_iam_role.control_plane.name
+
+  tags = var.tags
+}
+
+resource "aws_lb" "control_plane" {
+  name               = "${var.cluster_name}-cp"
+  internal           = false
+  load_balancer_type = "network"
+  subnets            = var.subnet_ids
+
+  tags = merge(var.tags, {
+    Name = "${var.cluster_name}-control-plane"
+  })
+}
+
+resource "aws_lb_target_group" "control_plane" {
+  name_prefix = "k8scp-"
+  port        = 6443
+  protocol    = "TCP"
+  vpc_id      = var.vpc_id
+
+  health_check {
+    protocol            = "TCP"
+    port                = 6443
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    interval            = 10
+  }
+
+  tags = merge(var.tags, {
+    Name = "${var.cluster_name}-control-plane"
+  })
+}
+
+resource "aws_lb_listener" "control_plane" {
+  load_balancer_arn = aws_lb.control_plane.arn
+  port              = 6443
+  protocol          = "TCP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.control_plane.arn
+  }
+}
+
+resource "aws_autoscaling_attachment" "control_plane" {
+  autoscaling_group_name = aws_autoscaling_group.control_plane.name
+  lb_target_group_arn   = aws_lb_target_group.control_plane.arn
+}
+
+resource "random_string" "bootstrap_token" {
+  length  = 6
+  special = false
+  upper   = false
+} 
