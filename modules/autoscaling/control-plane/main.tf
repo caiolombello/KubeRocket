@@ -29,6 +29,17 @@ locals {
     etcd_backup_bucket             = aws_s3_bucket.etcd_backup.id
     cluster_secret_id              = var.cluster_secret_id
     aws_region                     = data.aws_region.current.name
+    ssm_region = base64encode(jsonencode({
+      "ssm": {
+        "region": "${data.aws_region.current.name}"
+      }
+    }))
+    ssh = base64encode(jsonencode({
+      "ssh": {
+        "authorized-keys-command": "/opt/aws/bin/eic_run_authorized_keys %u %f",
+        "authorized-keys-command-user": "ec2-instance-connect"
+      }
+    }))
     control_plane_accepts_workloads = var.control_plane_accepts_workloads
   }))
 
@@ -339,17 +350,19 @@ resource "aws_launch_template" "control_plane" {
     cluster_name     = var.cluster_name
     pod_network_cidr = var.pod_network_cidr
     bootstrap_token  = random_string.bootstrap_token.result
-    etcd_backup_bucket = aws_s3_bucket.etcd_backup.id
-    kubernetes_version = var.kubernetes_version
-    control_plane_accepts_workloads = var.control_plane_accepts_workloads
-    etcd_endpoints = join(",", [for i in range(var.instance_count) : "https://etcd-${i}.${var.cluster_name}.internal:2379"])
-    initial_cluster = join(",", [for i in range(var.instance_count) : "etcd-${i}=https://etcd-${i}.${var.cluster_name}.internal:2380"])
-    aws_region     = data.aws_region.current.name
-    setup_image    = var.setup_image
-    setup_script   = local.setup_script
+    aws_region      = data.aws_region.current.name
     cluster_ca_cert = base64encode(tls_self_signed_cert.ca.cert_pem)
-    apiserver_cert  = base64encode(tls_locally_signed_cert.apiserver.cert_pem)
-    apiserver_key   = base64encode(tls_private_key.apiserver.private_key_pem)
+    ssh = base64encode(jsonencode({
+      "ssh": {
+        "authorized-keys-command": "/opt/aws/bin/eic_run_authorized_keys %u %f",
+        "authorized-keys-command-user": "ec2-instance-connect"
+      }
+    }))
+    ssm_region = base64encode(jsonencode({
+      "ssm": {
+        "region": data.aws_region.current.name
+      }
+    }))
   }))
 
   block_device_mappings {

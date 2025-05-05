@@ -158,13 +158,22 @@ resource "aws_vpc_endpoint" "ecr_dkr" {
 }
 
 # VPC Flow Logs
-resource "aws_cloudwatch_log_group" "flow_log" {
-  name              = "/aws/vpc/${var.cluster_name}-flow-logs"
-  retention_in_days = 30
+data "aws_cloudwatch_log_group" "flow_log" {
+  name = "/aws/vpc/${var.cluster_name}-flow-logs"
+  count = 1
+}
 
-  tags = merge(var.tags, {
-    Name = "${var.cluster_name}-flow-logs"
-  })
+resource "null_resource" "flow_log_group" {
+  triggers = {
+    log_group_name = "/aws/vpc/${var.cluster_name}-flow-logs"
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOF
+      aws logs describe-log-groups --log-group-name-prefix "/aws/vpc/${var.cluster_name}-flow-logs" --region ${data.aws_region.current.name} || \
+      aws logs create-log-group --log-group-name "/aws/vpc/${var.cluster_name}-flow-logs" --region ${data.aws_region.current.name}
+    EOF
+  }
 }
 
 resource "aws_iam_role" "flow_log" {
@@ -210,9 +219,11 @@ resource "aws_iam_role_policy" "flow_log" {
 
 resource "aws_flow_log" "main" {
   iam_role_arn    = aws_iam_role.flow_log.arn
-  log_destination = aws_cloudwatch_log_group.flow_log.arn
+  log_destination = "arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/vpc/${var.cluster_name}-flow-logs"
   traffic_type    = "ALL"
   vpc_id          = aws_vpc.main.id
+
+  depends_on = [null_resource.flow_log_group]
 
   tags = merge(var.tags, {
     Name = "${var.cluster_name}-flow-log"
@@ -297,4 +308,5 @@ resource "aws_security_group" "vpc_endpoints" {
   })
 }
 
-data "aws_region" "current" {} 
+data "aws_region" "current" {}
+data "aws_caller_identity" "current" {} 

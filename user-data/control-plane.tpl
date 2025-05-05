@@ -16,25 +16,12 @@ hostname = "$${HOSTNAME}"
 [settings.host-containers.admin]
 enabled = true
 superpowered = true
-user-data = '''
-{
-  "ssh": {
-    "authorized-keys-command": "/opt/aws/bin/eic_run_authorized_keys %u %f",
-    "authorized-keys-command-user": "ec2-instance-connect"
-  }
-}
-'''
+user-data = "${ssh}"
 
 [settings.host-containers.control]
 enabled = true
 superpowered = true
-user-data = '''
-{
-  "ssm": {
-    "region": "${aws_region}"
-  }
-}
-'''
+user-data = "${ssm_region}"
 
 [settings.updates]
 metadata-base-url = "https://updates.bottlerocket.aws"

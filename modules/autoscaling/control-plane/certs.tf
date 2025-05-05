@@ -69,7 +69,11 @@ resource "tls_locally_signed_cert" "apiserver" {
 
 # Store certificates in AWS Secrets Manager
 resource "aws_secretsmanager_secret" "cluster_certs" {
-  name = "${var.cluster_name}-certificates"
+  name_prefix = "${var.cluster_name}-certificates-"
+  force_overwrite_replica_secret = true
+  recovery_window_in_days = 0  # Immediate deletion
+
+  tags = var.tags
 }
 
 resource "aws_secretsmanager_secret_version" "cluster_certs" {
