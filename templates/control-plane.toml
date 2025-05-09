@@ -1,0 +1,50 @@
+[settings.kubernetes]
+api-server = "https://${hostname}:6443"
+cluster-name = "${cluster_name}"
+cluster-domain = "cluster.local"
+authentication-mode = "tls"
+standalone-mode = true
+cluster-certificate = "${cluster_ca_cert}"
+image-gc-high-threshold-percent = 85
+image-gc-low-threshold-percent = 80
+
+[settings.kubernetes.eviction-hard]
+"memory.available" = "15%"
+"nodefs.available" = "10%"
+"nodefs.inodesFree" = "5%"
+
+[settings.kubernetes.node-taints]
+dedicated = ["experimental:PreferNoSchedule", "experimental:NoExecute"]
+special = ["true:NoSchedule"]
+
+[settings.network]
+hostname = "${hostname}"
+
+[settings.host-containers.control]
+enabled = true
+superpowered = true
+user-data = "${control_userdata}"
+
+[settings.host-containers.k8s-bootstrap]
+enabled = true
+superpowered = true
+source = "${setup_image}"
+user-data = "${bootstrap_userdata}"
+
+[settings.ntp]
+time-servers = ["169.254.169.123", "time.aws.com"]
+
+[settings.kernel]
+lockdown = "integrity"
+
+[settings.kernel.sysctl]
+"net.ipv4.conf.all.forwarding" = "1"
+"net.ipv4.ip_forward" = "1"
+"net.bridge.bridge-nf-call-iptables" = "1"
+"net.ipv4.conf.all.send_redirects" = "0"
+"net.ipv4.conf.all.accept_redirects" = "0"
+
+[settings.container-runtime]
+max-container-log-line-size = 20971520
+enable-unprivileged-icmp = true
+enable-unprivileged-ports = true 

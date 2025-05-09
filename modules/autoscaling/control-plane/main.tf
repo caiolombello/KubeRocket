@@ -20,35 +20,66 @@ data "aws_ssm_parameter" "bottlerocket_arm64" {
 }
 
 locals {
-  setup_script = base64encode(templatefile("${var.scripts_path}/setup-k8s.sh", {
-    pod_network_cidr                = var.pod_network_cidr
-    bootstrap_token                 = random_string.bootstrap_token.result
-    node_ip                         = "$${KUBELET_NODE_IP}"
-    hostname                        = "$${HOSTNAME}"
-    cluster_name                    = var.cluster_name
-    etcd_backup_bucket             = aws_s3_bucket.etcd_backup.id
-    cluster_secret_id              = var.cluster_secret_id
-    aws_region                     = data.aws_region.current.name
-    ssm_region = base64encode(jsonencode({
-      "ssm": {
-        "region": "${data.aws_region.current.name}"
-      }
-    }))
-    ssh = base64encode(jsonencode({
-      "ssh": {
-        "authorized-keys-command": "/opt/aws/bin/eic_run_authorized_keys %u %f",
-        "authorized-keys-command-user": "ec2-instance-connect"
-      }
-    }))
-    control_plane_accepts_workloads = var.control_plane_accepts_workloads
-  }))
-
   # Bottlerocket version configuration
   bottlerocket_ssm_version = regex("^(\\d+\\.\\d+).*$", var.kubernetes_version)[0]
   
   # Instance architecture detection and AMI selection
   is_arm_instance = can(regex("^(a1|t4g|c6g|c7g|m6g|m7g|r6g|r7g)", var.instance_type))
   ami_id = local.is_arm_instance ? data.aws_ssm_parameter.bottlerocket_arm64.value : data.aws_ssm_parameter.bottlerocket_x86.value
+
+  # Prepare the CA certificate - ensure it's properly base64 encoded without newlines
+  cluster_ca_cert_base64 = replace(base64encode(tls_self_signed_cert.ca.cert_pem), "\n", "")
+
+  # Pre-compute base64 encoded user-data for control container
+  control_userdata = base64encode(jsonencode({
+    ssm = {
+      region = data.aws_region.current.name
+    }
+  }))
+
+  # Pre-compute base64 encoded user-data for k8s-bootstrap container
+  bootstrap_userdata = base64encode(<<-EOT
+    #!/bin/bash
+    set -e
+
+    INTERNAL_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+
+    kubeadm init \
+      --apiserver-advertise-address=$INTERNAL_IP \
+      --pod-network-cidr=${var.pod_network_cidr} \
+      --service-cidr=10.96.0.0/12 \
+      --upload-certs \
+      --node-name=$(hostname)
+
+    aws secretsmanager put-secret-value \
+      --secret-id ${var.cluster_secret_id} \
+      --secret-string "$(cat /etc/kubernetes/admin.conf)" \
+      --region ${data.aws_region.current.name}
+  EOT
+  )
+
+  # Use the TOML template for user data
+  control_plane_userdata = templatefile("${path.root}/templates/control-plane.toml", {
+    hostname          = "control-plane-1"
+    cluster_name      = var.cluster_name
+    pod_network_cidr  = var.pod_network_cidr
+    cluster_ca_cert   = local.cluster_ca_cert_base64
+    aws_region        = data.aws_region.current.name
+    setup_image       = var.setup_image
+    cluster_secret_id = var.cluster_secret_id
+    control_userdata  = local.control_userdata
+    bootstrap_userdata = local.bootstrap_userdata
+    kubernetes_version = var.kubernetes_version
+    ssh = <<-EOT
+[ssh]
+authorized-keys-command = "/opt/aws/bin/eic_run_authorized_keys %u %f"
+authorized-keys-command-user = "ec2-instance-connect"
+EOT
+    ssm_region = <<-EOT
+[ssm]
+region = "${data.aws_region.current.name}"
+EOT
+  })
 }
 
 # S3 bucket for etcd backups with enhanced configuration
@@ -338,7 +369,7 @@ resource "aws_iam_role_policy_attachment" "lambda_logs" {
 
 # Launch template for control plane nodes
 resource "aws_launch_template" "control_plane" {
-  name_prefix = "${var.cluster_name}-control-plane-${substr(sha256(local.setup_script), 0, 8)}-"
+  name_prefix = "${var.cluster_name}-control-plane-${substr(sha256(local.control_plane_userdata), 0, 8)}-"
   description = "Launch template for Kubernetes control plane nodes"
 
   image_id      = local.ami_id
@@ -346,24 +377,7 @@ resource "aws_launch_template" "control_plane" {
 
   vpc_security_group_ids = var.security_group_ids
 
-  user_data = base64encode(templatefile(var.user_data_template, {
-    cluster_name     = var.cluster_name
-    pod_network_cidr = var.pod_network_cidr
-    bootstrap_token  = random_string.bootstrap_token.result
-    aws_region      = data.aws_region.current.name
-    cluster_ca_cert = base64encode(tls_self_signed_cert.ca.cert_pem)
-    ssh = base64encode(jsonencode({
-      "ssh": {
-        "authorized-keys-command": "/opt/aws/bin/eic_run_authorized_keys %u %f",
-        "authorized-keys-command-user": "ec2-instance-connect"
-      }
-    }))
-    ssm_region = base64encode(jsonencode({
-      "ssm": {
-        "region": data.aws_region.current.name
-      }
-    }))
-  }))
+  user_data = base64encode(local.control_plane_userdata)
 
   block_device_mappings {
     device_name = "/dev/xvda"
@@ -382,7 +396,7 @@ resource "aws_launch_template" "control_plane" {
 
   metadata_options {
     http_endpoint               = "enabled"
-    http_tokens                 = "required"
+    http_tokens                = "required"
     http_put_response_hop_limit = 2
   }
 

@@ -33,11 +33,6 @@ variable "key_name" {
   type        = string
 }
 
-variable "user_data_template" {
-  description = "Path to the user data template file"
-  type        = string
-}
-
 variable "kubernetes_version" {
   description = "Version of Kubernetes to install"
   type        = string
@@ -65,11 +60,6 @@ variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)
   default     = {}
-}
-
-variable "scripts_path" {
-  description = "Path to the scripts directory"
-  type        = string
 }
 
 variable "aws_region" {

@@ -79,11 +79,9 @@ module "control_plane" {
   security_group_ids = [aws_security_group.control_plane.id]
   key_name        = aws_key_pair.kubernetes.key_name
   kubernetes_version = var.kubernetes_version
-  user_data_template = "${path.module}/user-data/control-plane.tpl"
   control_plane_accepts_workloads = var.control_plane_accepts_workloads
   
   setup_image     = "public.ecr.aws/l7c3q8m5/k8s-setup:1.32.4"
-  scripts_path    = "${path.module}/user-data"
   aws_region      = var.aws_region
   etcd_backup_bucket = aws_s3_bucket.etcd_backup.id
   cluster_secret_id = aws_secretsmanager_secret.cluster_info.id
