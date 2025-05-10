@@ -23,7 +23,6 @@ hostname = "${hostname}"
 [settings.host-containers.control]
 enabled = true
 superpowered = true
-user-data = "${control_userdata}"
 
 [settings.host-containers.k8s-bootstrap]
 enabled = true

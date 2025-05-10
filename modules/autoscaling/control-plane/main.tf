@@ -533,6 +533,40 @@ resource "aws_iam_role_policy" "control_plane_ssm_session" {
   })
 }
 
+# Add ECR permissions to the control plane role
+resource "aws_iam_role_policy" "control_plane_ecr" {
+  name_prefix = "ecr-access-"
+  role        = aws_iam_role.control_plane.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ecr:GetAuthorizationToken",
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:GetDownloadUrlForLayer",
+          "ecr:GetRepositoryPolicy",
+          "ecr:DescribeRepositories",
+          "ecr:ListImages",
+          "ecr:DescribeImages",
+          "ecr:BatchGetImage",
+          "ecr-public:GetAuthorizationToken",
+          "ecr-public:BatchCheckLayerAvailability",
+          "ecr-public:GetRepositoryPolicy",
+          "ecr-public:DescribeRepositories",
+          "ecr-public:DescribeImages",
+          "ecr-public:BatchGetImage",
+          "ecr-public:GetDownloadUrlForLayer",
+          "sts:GetServiceBearerToken"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 # IAM instance profile for control plane nodes
 resource "aws_iam_instance_profile" "control_plane" {
   name_prefix = "${var.cluster_name}-control-plane-"
